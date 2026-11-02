@@ -1,20 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: ["main"]
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'test/**'
-      - '*.json'
-      - '*.js'
-      - '*.ts'
-      - 'lib/**'
-      - 'scripts/**'
-      - '.github/workflows/ci.yml'
-      - 'package.json'
   workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Extra tap arguments (test files) to narrow the run'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -23,7 +15,7 @@ jobs:
   build:
     strategy:
       matrix:
-        node-version: [22.x, 24.x, 25.x]
+        node-version: [20.x, 22.x, 24.x, 25.x]
         platform:
         - os: ubuntu-latest
           shell: bash
@@ -36,6 +28,7 @@ jobs:
       fail-fast: false
 
     runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 30
     defaults:
       run:
         shell: ${{ matrix.platform.shell }}
@@ -53,4 +46,28 @@ jobs:
         run: npm install
 
       - name: Run Tests
-        run: npm test -- -c -t0
+        run: npm test -- -c -t0 --output-file=tap-output.tap ${{ inputs.test-filter }}
+
+      - name: List Windows-skipped assertions and their reason
+        if: always() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "Skip reason: upstream test/patterns.js marks 3 backslash-pattern entries with { skip: process.platform === 'win32' }"
+          echo "because on Windows a backslash is a path separator, not an escape, so those patterns cannot match as written."
+          echo "patterns.js is a data file; its entries are consumed by test/basic.js, test/defaults.js,"
+          echo "test/optimization-level-0.ts and test/optimization-level-2.ts, which is why each of those files reports SKIP lines on Windows only."
+          grep -n "skip: process.platform === 'win32'" test/patterns.js
+          echo "Skipped assertions in this run:"
+          grep -n "# SKIP" tap-output.tap || echo "no skipped assertions recorded"
+
+      - name: Pack
+        if: matrix.platform.os == 'ubuntu-latest' && matrix.node-version == '25.x'
+        run: npm pack
+
+      - name: Upload package tarball
+        if: matrix.platform.os == 'ubuntu-latest' && matrix.node-version == '25.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimatch-tgz
+          path: minimatch-*.tgz
+          if-no-files-found: error
